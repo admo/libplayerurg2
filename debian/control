@@ -1,0 +1,20 @@
+Source: libplayerurg2
+Priority: optional
+Maintainer: Adam Oleksy <adam.oleksy@pwr.wroc.pl>
+Build-Depends: debhelper (>= 7), cmake, pkg-config, libplayercore-dev, libcurg0.8-dev, libltdl-dev
+Standards-Version: 3.8.3
+Section: libs
+
+Package: libplayerurg2
+Section: libs
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Networked server for robots and sensors - urg laser driver library
+ Provides a network interface to a urg laser sensor
+ hardware.  Player's client/server model allows robot control programs
+ to be written in any programming language and to run on any computer
+ with a network connection to th e robot. Player supports multiple
+ concurrent client connections to devices, creating new possibilities
+ for distributed and collaborative sensing and control.
+ .
+ This package contains driver for urg laser.

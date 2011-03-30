@@ -1,0 +1,17 @@
+libplayerurg2 (0.0.1-0ubuntu0ppa3~lucid1) lucid; urgency=low
+
+  * Fix build dependencies.
+
+ -- Adam Oleksy <adam.oleksy@pwr.wroc.pl>  Tue, 29 Mar 2011 14:48:48 +0200
+
+libplayerurg2 (0.0.1-0ubuntu0ppa2~lucid1) lucid; urgency=low
+
+  * Fix build dependencies.
+
+ -- Adam Oleksy <adam.oleksy@pwr.wroc.pl>  Tue, 29 Mar 2011 14:36:55 +0200
+
+libplayerurg2 (0.0.1-0ubuntu0ppa1~lucid1) lucid; urgency=low
+
+  * Initial release.
+
+ -- Adam Oleksy <adam.oleksy@pwr.wroc.pl>  Tue, 29 Mar 2011 13:31:21 +0200
