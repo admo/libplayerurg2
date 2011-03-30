@@ -18,24 +18,23 @@
 
 #include <string>
 
-extern "C" {
-#include <urg_ctrl.h>
-}
+#include <urg/UrgCtrl.h>
 #include <libplayercore/playercore.h>
 
+#include <boost/smart_ptr/scoped_ptr.hpp>
+
+#include <algorithm>
+#include <iostream>
+
 extern PlayerTime* GlobalTime;
-
-const int urgBaudrate = 115200;
-const double urgAngleCorrection = DTOR(-18.0);
-const double urgRealMinAngle = -2.09439103;
-const double urgMinAngle = urgRealMinAngle + urgAngleCorrection;
-const double urgRealMaxAngle = 2.09439103;
-const double urgMaxAngle = urgRealMaxAngle + urgAngleCorrection;
-
 
 //////////////////////////////////////////////////////////////////////////////////////
 // Driver object
 //////////////////////////////////////////////////////////////////////////////////////
+
+float distLong2Float(long d) {
+    return 1.0 * d / 1e3;
+}
 
 class UrgDriver : public Driver {
 public:
@@ -51,22 +50,26 @@ private:
     virtual void Main(void);
 
     bool ReadLaser(void);
-    bool AllocateDataSpace(void);
+    bool setupLaser(void);
+
+    // Urg object
+    qrk::UrgCtrl mUrgCtrl;
 
     // Configuration parameters
-    bool _powerOnStartup;
-    double _minAngle, _maxAngle;
-    std::string _device;
-    int _baudRate;
+    bool mPowerOnStartup;
+    std::string mDeviceName;
+    int mBaudRate;
+    int mMinAngle;
+    int mMaxAngle;
 
     // Geometry
-    player_laser_geom_t _geom;
+    player_laser_geom_t mLaserGeom;
+    player_laser_config_t mLaserConfig;
+    //boost::scoped_ptr<player_laser_data_t> mRangeData;
+    player_laser_data_t mRangeData;
+    std::vector<long> mUrgData;
 
-    urg_t _urg;
-
-    long *_data;
-    int _dataSize;
-    int _scanID;
+    int mScanId;
 
 };
 
@@ -76,265 +79,183 @@ private:
 // Constructor/destructor
 ////////////////////////////////////////////////////////////////////////////////////////
 
-UrgDriver::UrgDriver(ConfigFile* cf, int section) :
-Driver(cf, section, false, PLAYER_MSGQUEUE_DEFAULT_MAXLEN, PLAYER_LASER_CODE),
-_data(NULL) {
+UrgDriver::UrgDriver(ConfigFile* cf, int section) : //mRangeData(new player_laser_data_t),
+Driver(cf, section, false, PLAYER_MSGQUEUE_DEFAULT_MAXLEN, PLAYER_LASER_CODE) {
+
     // Get config
-    _minAngle = cf->ReadFloat(section, "min_angle", urgRealMinAngle) + urgAngleCorrection;
-    _maxAngle = cf->ReadFloat(section, "max_angle", urgRealMaxAngle) + urgAngleCorrection;
-    _device = cf->ReadString(section, "device", "/dev/ttyACM0");
-    _powerOnStartup = cf->ReadBool(section, "power", true);
-    _baudRate = cf->ReadInt(section, "baudrate", urgBaudrate);
+    mLaserConfig.min_angle = DTOR(cf->ReadInt(section, "min_angle", -120));
+    mLaserConfig.max_angle = DTOR(cf->ReadInt(section, "max_angle", 120));
+    mLaserConfig.resolution = DTOR(0.36); //0.36deg
+    mLaserConfig.max_range = 1.0; //1m
+    mLaserConfig.range_res = 1.0 / 1000.0; //1mm
+
+    mDeviceName = cf->ReadString(section, "device", "/dev/ttyACM0");
+    mPowerOnStartup = cf->ReadBool(section, "power", true);
+    mBaudRate = cf->ReadInt(section, "baudrate", 115200);
 
     // Set up geometry information
-    _geom.pose.px = cf->ReadTupleLength(section, "pose", 0, 0.0);
-    _geom.pose.py = cf->ReadTupleLength(section, "pose", 1, 0.0);
-    _geom.pose.pa = DTOR(cf->ReadTupleLength(section, "pose", 2, 0.0));
-    _geom.size.sw = cf->ReadTupleLength(section, "size", 0, 0.05);
-    _geom.size.sl = cf->ReadTupleLength(section, "size", 1, 0.05);
+    mLaserGeom.pose.px = cf->ReadTupleLength(section, "pose", 0, 0.0);
+    mLaserGeom.pose.py = cf->ReadTupleLength(section, "pose", 1, 0.0);
+    mLaserGeom.pose.pa = DTOR(cf->ReadTupleLength(section, "pose", 2, 0.0));
+    mLaserGeom.size.sw = cf->ReadTupleLength(section, "size", 0, 0.05);
+    mLaserGeom.size.sl = cf->ReadTupleLength(section, "size", 1, 0.05);
+    
+    mUrgData.reserve(1024);
 }
 
 UrgDriver::~UrgDriver(void) {
-    if (_data != NULL)
-        delete[] _data;
+    mUrgCtrl.disconnect();
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
 // Driver implementation
 /////////////////////////////////////////////////////////////////////////////////////////
 
-bool UrgDriver::AllocateDataSpace(void) {
-
-    if (_data != NULL)
-        delete[] _data;
-
-    _dataSize = urg_dataMax(&_urg);
-    PLAYER_MSG1(1, "UrgDriver::AllocateDataSpace: Allocating data space: %d", _dataSize);
-    if ((_data = new long[_dataSize]) == NULL) {
-        PLAYER_ERROR1("UrgDriver::AllocateDataSpace: Failed to allocate space for data readings: ", _dataSize);
-        return false;
-    }
-    return true;
-}
-
 void UrgDriver::Main(void) {
     while (true) {
-        usleep(200000);
+        // Check to see if Player is trying to terminate the plugin thread
         pthread_testcancel();
+
+        // Process messages
         ProcessMessages();
 
         if (!ReadLaser())
             break;
+        // Sleep this thread so that it releases system resources to other threads
+        usleep(200000);
     }
 }
 
 int UrgDriver::ProcessMessage(MessageQueue *resp_queue, player_msghdr *hdr, void *data) {
     // Property handlers that need to be done manually 
-    if (Message::MatchMessage(hdr, PLAYER_MSGTYPE_REQ, PLAYER_LASER_REQ_SET_CONFIG, this->device_addr)) {
-        player_laser_config_t *req = reinterpret_cast<player_laser_config_t *> (data);
-        Publish(device_addr, resp_queue, PLAYER_MSGTYPE_RESP_ACK,
-                PLAYER_LASER_REQ_SET_CONFIG, data, hdr->size, NULL);
+    if (Message::MatchMessage(hdr, PLAYER_MSGTYPE_REQ, PLAYER_LASER_REQ_SET_CONFIG, device_addr)) {
+        player_laser_config_t *req = reinterpret_cast<player_laser_config_t*> (data);
+        // Setting configuration
+        mMinAngle = mUrgCtrl.index2deg(mUrgCtrl.rad2index(req->min_angle));
+        mMaxAngle = mUrgCtrl.index2deg(mUrgCtrl.rad2index(req->max_angle));
+        mUrgCtrl.setCaptureRange(mUrgCtrl.deg2index(mMinAngle), mUrgCtrl.deg2index(mMaxAngle));
+        Publish(device_addr, resp_queue, PLAYER_MSGTYPE_RESP_ACK, PLAYER_LASER_REQ_SET_CONFIG, data, hdr->size, NULL);
         return 0;
-    }
-        // Standard ranger messages
-    else if (Message::MatchMessage(hdr, PLAYER_MSGTYPE_REQ, PLAYER_LASER_REQ_GET_GEOM,
-            device_addr)) {
+    } else if (Message::MatchMessage(hdr, PLAYER_MSGTYPE_REQ, PLAYER_LASER_REQ_GET_GEOM, device_addr)) {
         Publish(device_addr, resp_queue, PLAYER_MSGTYPE_RESP_ACK, PLAYER_LASER_REQ_GET_GEOM,
-                &_geom, sizeof (_geom), NULL);
+                &mLaserGeom, sizeof (mLaserGeom), NULL);
         return 0;
     } else if (Message::MatchMessage(hdr, PLAYER_MSGTYPE_REQ, PLAYER_LASER_REQ_GET_CONFIG,
             device_addr)) {
         int ret;
         player_laser_config_t rangerConfig;
-        urg_parameter_t parameters;
-        ret = urg_parameters(&_urg, &parameters);
-        rangerConfig.min_angle = _minAngle;
-        rangerConfig.max_angle = _maxAngle;
-        rangerConfig.resolution = DTOR(0.352); //DTOR (360.0)/parameters.area_total_;
-        rangerConfig.max_range = parameters.distance_max_ / 1000.0;
+        rangerConfig.min_angle = DTOR(mMinAngle);
+        rangerConfig.max_angle = DTOR(mMaxAngle);
+        rangerConfig.resolution =
+                rangerConfig.max_range = mUrgCtrl.maxDistance() / 1000.0;
         rangerConfig.range_res = 0.03; // 30mm
-        Publish(device_addr, resp_queue, PLAYER_MSGTYPE_RESP_ACK,
-                PLAYER_LASER_REQ_GET_CONFIG, &rangerConfig,
-                sizeof (rangerConfig), NULL);
-        return 0;
-    } else if (Message::MatchMessage(hdr, PLAYER_MSGTYPE_REQ, PLAYER_LASER_REQ_SET_CONFIG,
-            device_addr)) {
-        player_laser_config_t *newParams = reinterpret_cast<player_laser_config_t*> (data);
-
-        //_minAngle = newParams->min_angle;
-        //_maxAngle = newParams->max_angle;
-        if (!AllocateDataSpace()) {
-            PLAYER_ERROR("UrgDriver::ProcessMessage: Failed to allocate space for storing range data.");
-            Publish(device_addr, resp_queue, PLAYER_MSGTYPE_RESP_NACK,
-                    PLAYER_LASER_REQ_GET_CONFIG, NULL, 0, NULL);
-            return 0;
-        }
-        int ret;
-        urg_parameter_t parameters;
-        ret = urg_parameters(&_urg, &parameters);
-        if (ret < 0) {
-            PLAYER_ERROR("UrgDriver::ProcessMessage: Library error while changing settings:");
-            Publish(device_addr, resp_queue, PLAYER_MSGTYPE_RESP_NACK,
-                    PLAYER_LASER_REQ_GET_CONFIG, NULL, 0, NULL);
-            return 0;
-        }
-#if 0
-        if (_minAngle < urg_index2rad(&_urg, parameters.area_min_)) {
-            _minAngle = urg_index2rad(&_urg, parameters.area_min_);
-            PLAYER_WARN1("UrgDriver::ProcessMessage: Adjusted min_angle to %lf",_minAngle);
-        }
-        if (_maxAngle > urg_index2rad(&_urg, parameters.area_max_)) {
-            _maxAngle = urg_index2rad(&_urg, parameters.area_max_);
-            PLAYER_WARN1("UrgDriver::ProcessMessage: Adjusted max_angle to %lf", _maxAngle);
-        }
-#endif
-        Publish(device_addr, resp_queue, PLAYER_MSGTYPE_RESP_ACK,
-                PLAYER_LASER_REQ_GET_CONFIG, newParams,
-                sizeof (*newParams), NULL);
+        Publish(device_addr, resp_queue, PLAYER_MSGTYPE_RESP_ACK, PLAYER_LASER_REQ_GET_CONFIG, &rangerConfig, sizeof (rangerConfig), NULL);
         return 0;
     }
     return -1;
 }
 
 bool UrgDriver::ReadLaser(void) {
-    player_laser_data_t rangeData;
     double time;
     GlobalTime->GetTimeDouble(&time);
-    int ret;
-    int n;
-    int timestamp;
-    int index_first = URG_FIRST;
-    int index_last = URG_LAST;
-    double angle;
 
-    angle = urgMinAngle;
-    for (index_first = URG_FIRST; angle < _minAngle; index_first++) {
-        angle += DTOR(0.352);
-    }
-    angle = urgMinAngle;
-    for (index_last = index_first; angle <= _maxAngle; index_last++) {
-        angle += DTOR(0.352);
-    }
-
-    //  ret = urg_requestData(&_urg, URG_GD, URG_FIRST, URG_LAST);
-    ret = urg_requestData(&_urg, URG_GD, index_first, index_last);
-    if (ret < 0) {
+    if (mUrgCtrl.capture(mUrgData) < 0) {
         PLAYER_ERROR("UrgDriver::ReadLaser: Failed to read scan.");
         return false;
     }
-    //n = urg_receiveData(&_urg, _data, _dataSize);
-    n = urg_receivePartialData(&_urg, _data, _dataSize, index_first, index_last);
-    timestamp = urg_recentTimestamp(&_urg);
 
-    rangeData.min_angle = _minAngle;
-    rangeData.max_angle = _maxAngle;
-    rangeData.max_range = 5.6;
-    rangeData.resolution = DTOR(0.352);
-    rangeData.ranges_count = n;
-    rangeData.intensity_count = 0;
-    rangeData.id = _scanID++;
+    // Set mRangeData structure
+    mRangeData.min_angle = mLaserConfig.min_angle;
+    mRangeData.max_angle = mLaserConfig.min_angle;
+    mRangeData.max_range = mLaserConfig.max_range;
+    mRangeData.resolution = mLaserConfig.resolution;
+    mRangeData.intensity_count = 0;
+    ++mRangeData.id;
 
-    for (unsigned int i = 0; i < n; i++)
-        rangeData.ranges[i] = 1.0 * _data[i] / 1e3;
-    for (unsigned int i = 0; i < n; i++) {
-        if (rangeData.ranges[i] < 0.02) {// bledne wyniki, usrendiamy
+    mRangeData.ranges_count = 0;
+    for (int i = mUrgCtrl.rad2index(mLaserConfig.min_angle); i < mUrgData.size(); ++i) {
+        mRangeData.ranges[mRangeData.ranges_count++] = 1.0 * mUrgData[i] / 1e3;
+    }
+    std::transform(mUrgData.begin() + mUrgCtrl.rad2index(mLaserConfig.min_angle),
+    mUrgData.begin() + mUrgData.size(), mRangeData.ranges, distLong2Float);
+    
+    
+    for (unsigned int i = 0; i < mRangeData.ranges_count; i++) {
+        if (mRangeData.ranges[i] < 0.02) {// bledne wyniki, usrendiamy
             double r_0 = 0, r_1 = 0;
             int j, k;
-            for (j = i; j < n; j++) // szukamy kolejnego porpawnego
-                if (rangeData.ranges[j] > 0.02)
+            for (j = i; j < mRangeData.ranges_count; j++) // szukamy kolejnego porpawnego
+                if (mRangeData.ranges[j] > 0.02)
                     break;
-            if (j < n) //znalezlismy
-                r_1 = rangeData.ranges[j];
+            if (j < mRangeData.ranges_count) //znalezlismy
+                r_1 = mRangeData.ranges[j];
             else
                 r_1 = 0;
             if (i > 0) // znalezlismy
-                r_0 = rangeData.ranges[i - 1];
+                r_0 = mRangeData.ranges[i - 1];
             else
                 r_0 = r_1;
             if (r_1 == 0)
                 r_1 = r_0;
             if (r_1 == 0)
-                r_1 = r_0 = rangeData.max_range;
+                r_1 = r_0 = mRangeData.max_range;
             for (k = i; k < j; k++)
                 //rangeData.ranges[k]=(r_1+r_0)/2;
-                rangeData.ranges[k] = r_0 + (r_1 - r_0)*(k - i) / (j - i);
+                mRangeData.ranges[k] = r_0 + (r_1 - r_0)*(k - i) / (j - i);
         }
-
     }
+    
     Publish(device_addr, NULL, PLAYER_MSGTYPE_DATA, PLAYER_LASER_DATA_SCAN,
-            reinterpret_cast<void*> (&rangeData), sizeof (rangeData), &time);
+            &mRangeData, sizeof(mRangeData), &time);
+    
     return true;
 }
 
 int UrgDriver::Setup(void) {
-    int ret;
-    // Open the laser
-    ret = urg_connect(&_urg, _device.c_str(), _baudRate);
-    if (ret < 0) {
+    if (!mUrgCtrl.connect(mDeviceName.c_str(), mBaudRate)) {
         PLAYER_ERROR("UrgDriver::Setup: Failed to connect to laser.");
         return -1;
     }
 
-    // Get the sensor information and check _minAngle and _maxAngle are OK
-    urg_parameter_t parameters;
-    ret = urg_parameters(&_urg, &parameters);
-    if (ret < 0) {
-        PLAYER_ERROR("UrgDriver::Setup: Failed obtain laser parameters.");
-        return -1;
-    }
-    
-    if (_minAngle-urgAngleCorrection < urg_index2rad(&_urg, parameters.area_min_)) {
-        _minAngle = urg_index2rad(&_urg, parameters.area_min_) + urgAngleCorrection;
-        PLAYER_WARN1("UrgDriver::Setup: Adjusted min_angle to %lf", _minAngle-urgAngleCorrection);
-    }
-    if (_maxAngle-urgAngleCorrection > urg_index2rad(&_urg, parameters.area_max_)) {
-        _maxAngle = urg_index2rad(&_urg, parameters.area_max_) + urgAngleCorrection;
-        PLAYER_WARN1("UrgDriver::Setup: Adjusted max_angle to %lf", _maxAngle-urgAngleCorrection);
-    }
-
-    if (!AllocateDataSpace())
-        return -1;
-
-    if (_powerOnStartup)
-        urg_laserOn(&_urg);
+    mUrgCtrl.setLaserOutput(mPowerOnStartup);
 
     // Get some laser info
     PLAYER_MSG0(0, "UrgDriver::Setup: Laser sensor information:");
-    int LinesMax = 5;
-    char buffer[LinesMax][UrgLineWidth];
-    char *lines[UrgLineWidth];
-
-    std::string info;
-    size_t endOfLine;
-    for (int i = 0; i < LinesMax; ++i) {
-        lines[i] = buffer[i];
-    }
-
-    ret = urg_versionLines(&_urg, lines, LinesMax);
-    if (ret < 0) {
+    typedef std::vector<std::string> StringVector;
+    StringVector info;
+    if (!mUrgCtrl.versionLines(info)) {
         PLAYER_ERROR("UrgDriver::Setup: Failed to obtain laser information data.");
         return -1;
     }
 
-    for (int i = 0; i < LinesMax; ++i) {
-        info = lines[i];
-        endOfLine = info.find(";");
-        info.erase(endOfLine);
-        PLAYER_MSG1(0, "UrgDriver::Setup: %s", info.c_str());
+    for (StringVector::const_iterator i = info.begin(); i < info.end(); ++i) {
+        PLAYER_MSG1(0, "UrgDriver::Setup: %s", i->c_str());
     }
 
+    setupLaser();
+
+    mRangeData.id = 0;
+
     StartThread();
-    _scanID = 0;
     return 0;
+}
+
+bool UrgDriver::setupLaser() {
+    if (!mUrgCtrl.isConnected())
+        return false;
+
+    std::cout << mUrgCtrl.rad2index(mLaserConfig.min_angle) << " " << mUrgCtrl.rad2index(mLaserConfig.max_angle) << "\n";
+    mUrgCtrl.setCaptureRange(mUrgCtrl.rad2index(mLaserConfig.min_angle),
+            mUrgCtrl.rad2index(mLaserConfig.max_angle));
+
+    mLaserConfig.max_range = mUrgCtrl.maxDistance() / 1000.0;
+
+    return true;
 }
 
 int UrgDriver::Shutdown(void) {
     StopThread();
-    urg_disconnect(&_urg);
-    if (_data != NULL)
-        delete[] _data;
-    _data = NULL;
-
+    mUrgCtrl.disconnect();
     return 0;
 }
 
