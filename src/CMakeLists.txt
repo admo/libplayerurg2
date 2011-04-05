@@ -10,5 +10,9 @@ include_directories (${urg_INCLUDE_DIRS} ${playercore_INCLUDE_DIRS})
 add_library (playerurg2 SHARED playerurg.cpp)
 target_link_libraries (playerurg2 ${urg_LIBRARIES} ${playercore_LIBRARIES})
 
-install(TARGETS playerurg2 DESTINATION lib)
+set_target_properties (playerurg2 PROPERTIES
+  VERSION 0.0.1
+  SOVERSION 0.0.1)
+
+install(TARGETS playerurg2 DESTINATION lib COMPONENT libraries)
 install(FILES urglaser.cfg DESTINATION  share/player/config)
