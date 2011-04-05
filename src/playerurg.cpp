@@ -27,7 +27,6 @@
 
 #include <cstring>
 #include <algorithm>
-#include <iostream>
 
 extern PlayerTime* GlobalTime;
 
