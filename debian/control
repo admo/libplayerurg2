@@ -1,7 +1,7 @@
 Source: libplayerurg2
 Priority: optional
 Maintainer: Adam Oleksy <adam.oleksy@pwr.wroc.pl>
-Build-Depends: debhelper (>= 7), cmake, pkg-config, libplayercore-dev, libcurg0.8-dev, libltdl-dev
+Build-Depends: debhelper (>= 7), cmake, pkg-config, libplayercore-dev, liburg0.8-dev, libltdl-dev
 Standards-Version: 3.8.3
 Section: libs
 

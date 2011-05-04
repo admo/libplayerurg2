@@ -25,6 +25,8 @@
 #include <boost/lambda/bind.hpp>
 #include <boost/lambda/if.hpp>
 
+#include <unistd.h>
+
 #include <cstring>
 #include <algorithm>
 
@@ -68,6 +70,8 @@ private:
     bool mPowerOnStartup;
     std::string mDeviceName;
     int mBaudRate;
+    
+    useconds_t mainSleep;
 };
 
 
@@ -102,6 +106,8 @@ Driver(cf, section, false, PLAYER_MSGQUEUE_DEFAULT_MAXLEN, PLAYER_LASER_CODE) {
     mLaserGeom.size.sl = cf->ReadTupleLength(section, "size", 1, 0.05);
     
     mUrgReadings.reserve(1024);
+    
+    mainSleep = cf->ReadInt(section, "main_sleep", 100);
 }
 
 UrgDriver::~UrgDriver(void) {
@@ -123,7 +129,7 @@ void UrgDriver::Main(void) {
         if (!ReadLaser())
             break;
         // Sleep this thread so that it releases system resources to other threads
-        usleep(10);
+        usleep(mainSleep);
     }
 }
 
