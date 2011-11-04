@@ -107,7 +107,7 @@ Driver(cf, section, false, PLAYER_MSGQUEUE_DEFAULT_MAXLEN, PLAYER_LASER_CODE) {
     
     mUrgReadings.reserve(1024);
     
-    mainSleep = cf->ReadInt(section, "main_sleep", 100);
+    mainSleep = cf->ReadInt(section, "period", 100);
 }
 
 UrgDriver::~UrgDriver(void) {

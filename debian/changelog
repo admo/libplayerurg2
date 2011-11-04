@@ -1,8 +1,20 @@
+libplayerurg2 (0.0.1-0ubuntu0ppa7~lucid1) lucid; urgency=low
+
+  * Zmiana nazwy parametru okreslajacego czestotliwosc odswiezania
+
+ -- Adam Oleksy <adam.oleksy@pwr.wroc.pl>  Fri, 04 Nov 2011 14:30:44 +0100
+
+libplayerurg2 (0.0.1-0ubuntu0ppa6~lucid1) lucid; urgency=low
+
+  * Dodanie opcji komfiguracyjnej uspenia watka lasera
+
+ -- Adam Oleksy <adam.oleksy@pwr.wroc.pl>  Wed, 04 May 2011 14:05:22 +0200
+
 libplayerurg2 (0.0.1-0ubuntu0ppa3~lucid1) lucid; urgency=low
 
   * Fix build dependencies.
 
- -- Adam Oleksy <adam.oleksy@pwr.wroc.pl>  Tue, 29 Mar 2011 14:48:48 +0200
+ -- Adam Oleksy <adam.oleksy@pwr.wroc.pl>  Wed, 04 May 2011 14:00:12 +0200
 
 libplayerurg2 (0.0.1-0ubuntu0ppa2~lucid1) lucid; urgency=low
 
